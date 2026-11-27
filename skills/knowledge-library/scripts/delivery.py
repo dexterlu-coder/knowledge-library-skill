@@ -55,6 +55,8 @@ def targets(data):
     values = data["targets"] if "targets" in data else [data]
     keys = set()
     for target in values:
+        if target.get("mode") not in (None, "entry", "direct"):
+            raise ValueError("Unknown binding mode")
         key = target_key(target)
         address = urlsplit(target["url"])
         if (key in keys or not target["name"].strip() or address.scheme != "https"
@@ -358,6 +360,11 @@ def run_delivery(root, source, job, checkpoint):
                 address = urlsplit(target["url"])
                 result.update(url=f"{address.scheme}://{address.netloc}/wiki/{node['node_token']}",
                               body_status="verified", version=record["version"])
+                result["parent_status"] = "unverified"
+                current = lark("wiki", "+node-get", "--node-token", node["node_token"],
+                               "--space-id", target["space_id"])
+                scope(current, target)
+                result["parent_status"] = "verified"
                 if card["attachments"]:
                     verified = result["attachments_verified"] = []
                     pending = result["attachments_pending"] = [item["name"] for item in card["attachments"]]
@@ -434,7 +441,8 @@ def main():
             for target in selected:
                 node = lark("wiki", "+node-get", "--node-token", target["url"],
                             "--space-id", target["space_id"])
-                if node["node_token"] != target["parent_node_token"]:
+                if (node["node_token"] != target["parent_node_token"]
+                        or node["space_id"] != target["space_id"]):
                     raise RuntimeError("Parent lookup did not match selected target")
             save(config, {"targets": selected})
             return read(config)
@@ -459,6 +467,10 @@ def main():
                     for card in request["cards"]], "pages": {}, "deliveries": {}}
             if args.action == "prepare":
                 selected = targets({"targets": request["targets"]} if "targets" in request else read(config))
+                if any(t.get("mode") == "entry" for t in selected):
+                    raise ValueError("Resolve each library entry to a filing destination before prepare")
+                if "targets" not in request and any(t.get("mode") != "direct" for t in selected):
+                    raise ValueError("Check the legacy binding and supply the actual filing targets")
                 check_legacy(root, source, selected)
                 cards = original_cards(job)
                 versions = [card["version"] for card in cards]
